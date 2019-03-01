@@ -14,6 +14,6 @@ This software reads a configuration file (``/etc/hifipowerd.conf``) and gets the
 ``address/hifi/power/off`` (GET) - turns the power off.
 
 Future features
-===============
+---------------
 
 Use PulseAudio or ALSA to detect lack of audio signal on the input (configurable), then if no audio is present for a preset time (e.g. 10 minutes), turn the equipment off automatically. Prevents idle power draw by e.g. vacuum tube amplifiers.
