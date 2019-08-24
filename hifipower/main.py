@@ -69,9 +69,14 @@ def webapi():
         """Turn power on or off"""
         try:
             driver.set_output(state)
-            return 'Power is now {}'.format('ON' if state else 'OFF')
+            message = 'Power is now {}'.format('ON' if state else 'OFF')
+            LOG.info(message)
+            return message
         except driver.AutoControlDisabled:
-            return ('403 Forbidden: Automatic control disabled', 403)
+            message = ('Canot turn the power {}. Automatic control disabled'
+                       .format('ON' if state else 'OFF'))
+            LOG.error(message)
+            return ('403 Forbidden: {}'.format(message), 403)
 
     def turn_on():
         """Turn the power on"""
@@ -81,14 +86,18 @@ def webapi():
         """Turn the power off"""
         return control(OFF)
 
+    # webserver name and endpoints
     app = Flask('hifipowerd')
     app.route('/')(index)
     app.route('/power')(status)
     app.route('/power/on')(turn_on)
     app.route('/power/off')(turn_off)
+    # configuration to run the webserver
     config = CFG.defaults()
-    app.run(config.get('address'), config.get('port'),
-            debug=config.get('debug_mode'))
+    address, port = config.get('address'), config.get('port')
+    debug_mode = config.get('debug_mode')
+    LOG.info('Starting rpi2casterd web API on {}:{}'.format(address, port))
+    app.run(address, port, debug=debug_mode)
 
 
 def main():
