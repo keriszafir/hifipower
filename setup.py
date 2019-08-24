@@ -1,7 +1,7 @@
 """hifipower setup, meant for Raspberry Pi or Orange Pi"""
 from setuptools import setup
 
-__version__ = '0.1a3'
+__version__ = '0.1b1'
 __author__ = 'Christophe Catherine Slychan'
 __author_email__ = 'krzysztof.slychan@gmail.com'
 __github_url__ = 'http://github.com/elegantandrogyne/hifipower'
@@ -16,7 +16,7 @@ setup(name='hifipower', version=__version__,
       url=__github_url__, author=__author__, author_email=__author_email__,
       license='MIT',
       packages=['hifipower'], include_package_data=False,
-      classifiers=['Development Status :: 3 - Alpha',
+      classifiers=['Development Status :: 4 - Beta',
                    'Topic :: System :: Hardware :: Hardware Drivers',
                    'License :: OSI Approved :: MIT License',
                    'Natural Language :: English',

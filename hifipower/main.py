@@ -81,6 +81,8 @@ def main():
     # get the GPIO definitions and set up the I/O
     journald_setup()
     driver.gpio_setup(CFG.defaults())
+    # start the web interface
+    webapi()
 
 
 if __name__ == '__main__':
