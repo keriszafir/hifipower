@@ -46,31 +46,14 @@ def gpio_setup(config):
         command = 'sudo systemctl reboot'
         subprocess.run([x.strip() for x in command.split(' ')])
 
-    # update the defaults with values from config
-    gpio_defs = {k: v for k, v in config.items() if k in GPIO_DEFINITIONS}
-
-    gpios = dict(relay_out=dict(direction=GPIO.OUT),
-                 auto_mode_in=dict(direction=GPIO.IN),
-                 shutdown_button=dict(direction=GPIO.IN,
-                                      pull_up_down=GPIO.PUD_UP),
-                 reboot_button=dict(direction=GPIO.IN,
-                                    pull_up_down=GPIO.PUD_UP))
+    gpios = dict(relay_out=GPIO.OUT, auto_mode_in=GPIO.IN,
+                 shutdown_button=GPIO.IN, reboot_button=GPIO.IN)
     callbacks = dict(shutdown_button=shutdown,
                      reboot_button=reboot)
 
-    for gpio_name, gpio_id in gpio_defs.items():
-        if gpio_id is None:
-            # skip the undefined GPIO
-            continue
-
-        parameters = dict()
-        try:
-            parameters.update(gpios[gpio_name])
-        except KeyError:
-            # not found in gpios: unknown GPIO, or no GPIO definition at all
-            continue
-
-        GPIO.setup(gpio_id, **parameters)
+    for gpio_name, direction in gpios.items():
+        gpio_id = config.get(gpio_name, GPIO_DEFINITIONS[gpio_name])
+        GPIO.setup(gpio_id, direction)
         # update the value in main storage
         GPIO_DEFINITIONS[gpio_name] = gpio_id
         # set up a threaded callback if needed
