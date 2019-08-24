@@ -26,7 +26,7 @@ import signal
 import sys
 from configparser import ConfigParser
 from contextlib import suppress
-from flask import Flask, jsonify
+from flask import Flask, abort, jsonify
 from . import driver
 
 ON, OFF = True, False
@@ -71,7 +71,7 @@ def webapi():
             driver.set_output(state)
             return 'Power is now {}'.format('ON' if state else 'OFF')
         except driver.AutoControlDisabled:
-            return ('Automatic control disabled', 403)
+            return ('403 Forbidden: Automatic control disabled', 403)
 
     def turn_on():
         """Turn the power on"""
