@@ -26,11 +26,12 @@ import signal
 import sys
 from configparser import ConfigParser
 from contextlib import suppress
-from flask import Flask
+from flask import Flask, jsonify
 from . import driver
 
 LOG = logging.getLogger('hifipowerd')
-CFG = ConfigParser(defaults=dict(relay_out='PA7',
+CFG = ConfigParser(defaults=dict(address='127.0.0.1', port=8080,
+                                 relay_out='PA7',
                                  auto_mode_in='PA8',
                                  shutdown_button='PA9',
                                  reboot_button='PA10'))
@@ -55,12 +56,17 @@ def journald_setup():
 def webapi():
     """JSON web API for communicating with the casting software."""
     def index():
-        """Get or change the interface's current status."""
-        return dict(power=driver.check_output_state(),
-                    auto_mode=driver.check_automatic_mode())
+        """Index page to show that it's alive"""
+        return "It works!"
 
-    app = Flask('rpi2casterd')
-    app.route('/power')(index)
+    def status():
+        """Get or change the interface's current status."""
+        return jsonify(dict(power=driver.check_output_state(),
+                            auto_mode=driver.check_automatic_mode()))
+
+    app = Flask('hifipowerd')
+    app.route('/')(index)
+    app.route('/power')(status)
     app.route('/power/on')(driver.turn_on)
     app.route('/power/off')(driver.turn_off)
     config = CFG.defaults()
