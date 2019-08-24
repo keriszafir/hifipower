@@ -30,8 +30,8 @@ from flask import Flask
 from . import driver
 
 LOG = logging.getLogger('hifipowerd')
-CFG = ConfigParser(defaults=dict(auto_mode_in='PA7',
-                                 control_out='PA8',
+CFG = ConfigParser(defaults=dict(relay_out='PA7',
+                                 auto_mode_in='PA8',
                                  shutdown_button='PA9',
                                  reboot_button='PA10'))
 CFG.read('/etc/hifipowerd.conf')

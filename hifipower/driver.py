@@ -38,12 +38,12 @@ def gpio_setup(config):
     sets the outputs and inputs accordingly."""
     def shutdown():
         """Shut the system down"""
-        command = 'sudo systemctl poweroff'
+        command = config.get('shutdown_command', 'sudo systemctl poweroff')
         subprocess.run([x.strip() for x in command.split(' ')])
 
     def reboot():
         """Restart the system"""
-        command = 'sudo systemctl reboot'
+        command = config.get('reboot_command', 'sudo systemctl reboot')
         subprocess.run([x.strip() for x in command.split(' ')])
 
     gpios = dict(relay_out=GPIO.OUT, auto_mode_in=GPIO.IN,
