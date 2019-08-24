@@ -81,3 +81,7 @@ def main():
     # get the GPIO definitions and set up the I/O
     journald_setup()
     driver.gpio_setup(CFG.defaults())
+
+
+if __name__ == '__main__':
+    main()
