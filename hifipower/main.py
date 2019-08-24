@@ -29,8 +29,9 @@ from contextlib import suppress
 from flask import Flask, jsonify
 from . import driver
 
+ON, OFF = True, False
 LOG = logging.getLogger('hifipowerd')
-CFG = ConfigParser(defaults=dict(address='127.0.0.1', port=8080,
+CFG = ConfigParser(defaults=dict(address='0.0.0.0', port=8000,
                                  relay_out='PA7',
                                  auto_mode_in='PA8',
                                  shutdown_button='PA9',
@@ -64,11 +65,27 @@ def webapi():
         return jsonify(dict(power=driver.check_output_state(),
                             auto_mode=driver.check_automatic_mode()))
 
+    def control(state):
+        """Turn power on or off"""
+        try:
+            driver.set_output(state)
+            return 'Power is now {}'.format('ON' if state else 'OFF')
+        except driver.AutoControlDisabled:
+            return ('Automatic control disabled', 403)
+
+    def turn_on():
+        """Turn the power on"""
+        return control(ON)
+
+    def turn_off():
+        """Turn the power off"""
+        return control(OFF)
+
     app = Flask('hifipowerd')
     app.route('/')(index)
     app.route('/power')(status)
-    app.route('/power/on')(driver.turn_on)
-    app.route('/power/off')(driver.turn_off)
+    app.route('/power/on')(turn_on)
+    app.route('/power/off')(turn_off)
     config = CFG.defaults()
     app.run(config.get('address'), config.get('port'),
             debug=config.get('debug_mode'))

@@ -24,9 +24,6 @@ except ImportError:
     print('Using RPi.GPIO on a Raspberry Pi with the BCM numbering.')
 
 
-ON, OFF = True, False
-
-
 class AutoControlDisabled(Exception):
     """Exception raised when trying to turn the device on or off
     if the equipment is switched OFF or ON manually.
@@ -84,13 +81,3 @@ def set_output(state):
         raise AutoControlDisabled
     channel = GPIO_DEFINITIONS['relay_out']
     GPIO.output(channel, state)
-
-
-def turn_on():
-    """Turns the power ON"""
-    set_output(ON)
-
-
-def turn_off():
-    """Turns the power OFF"""
-    set_output(OFF)
