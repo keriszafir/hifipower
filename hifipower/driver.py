@@ -102,5 +102,5 @@ def set_output(state):
 
 def set_led(state):
     """Controls the state of the "ready" LED"""
-    channel = GPIO_DEFINITIONS['led_out']
+    channel = GPIO_DEFINITIONS['ready_led']
     GPIO.output(channel, state)
