@@ -26,16 +26,18 @@ import signal
 import sys
 from configparser import ConfigParser
 from contextlib import suppress
-from flask import Flask, abort, jsonify
+from flask import Flask, jsonify
 from . import driver
+from .driver import ON, OFF
 
-ON, OFF = True, False
 LOG = logging.getLogger('hifipowerd')
 CFG = ConfigParser(defaults=dict(address='0.0.0.0', port=8000,
                                  relay_out='PA7',
                                  auto_mode_in='PA8',
                                  shutdown_button='PA9',
-                                 reboot_button='PA10'))
+                                 reboot_button='PA10',
+                                 relay_state='PA11',
+                                 ready_led='PA12'))
 CFG.read('/etc/hifipowerd.conf')
 
 
