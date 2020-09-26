@@ -68,7 +68,7 @@ def webapi():
     def control(state):
         """Turn power on or off"""
         try:
-            driver.set_output(state)
+            driver.set_relay(state)
             message = 'Power is now {}'.format('ON' if state else 'OFF')
             LOG.info(message)
             return message

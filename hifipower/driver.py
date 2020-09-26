@@ -12,7 +12,7 @@ try:
     # use SUNXI as it gives the most predictable results
     import OPi.GPIO as GPIO
     GPIO.setmode(GPIO.SUNXI)
-    GPIO_DEFINITIONS = dict(onoff_button='PC4',
+    GPIO_DEFINITIONS = dict(onoff_button='PC4', mode_led='PC7',
                             relay_out='PA7', auto_mode_in='PA8',
                             shutdown_button='PA9', reboot_button='PA10',
                             relay_state='PA11', ready_led='PA12')
@@ -23,7 +23,7 @@ except ImportError:
     # use BCM as it is the most conventional scheme here
     import RPi.GPIO as GPIO
     GPIO.setmode(GPIO.BCM)
-    GPIO_DEFINITIONS = dict(onoff_button=23,
+    GPIO_DEFINITIONS = dict(onoff_button=23, mode_led=4,
                             relay_out=5, auto_mode_in=6,
                             shutdown_button=13, reboot_button=19,
                             relay_state=3, ready_led=2)
@@ -54,64 +54,72 @@ def gpio_setup(config):
     def toggle_state():
         """Turn the power on or off after pressing the on/off button,
         depending on the previous state"""
-        set_output(not check_output_state())
+        set_relay(not check_state('relay_out'))
+
+    def check_auto_mode():
+        """When the automatic control mode is on, turn on the red LED,
+        when it's off, turn the LED off"""
+        set_led('mode_led', check_state('auto_mode_in'))
 
     def finish():
         """Blink a LED and then clean the GPIO"""
-        for _ in range(5):
-            set_led(OFF)
-            time.sleep(0.2)
-            set_led(ON)
-            time.sleep(0.2)
-        set_led(OFF)
+        set_led('ready_led', OFF, blink=5)
         GPIO.cleanup()
 
-    gpios = dict(onoff_button=GPIO.IN,
+    gpios = dict(onoff_button=GPIO.IN, mode_led=GPIO.OUT,
                  relay_out=GPIO.OUT, auto_mode_in=GPIO.IN,
                  shutdown_button=GPIO.IN, reboot_button=GPIO.IN,
                  relay_state=GPIO.IN, ready_led=GPIO.OUT)
 
     callbacks = dict(shutdown_button=shutdown, reboot_button=reboot,
-                     onoff_button=toggle_state)
+                     onoff_button=toggle_state, auto_mode_in=check_auto_mode)
 
     for gpio_name, direction in gpios.items():
         # if not configured then use fallback
         gpio_id = config.get(gpio_name, GPIO_DEFINITIONS[gpio_name])
-        GPIO.setup(gpio_id, direction)
+        if direction == GPIO.OUT:
+            # set the "off" initial state of outputs just in case
+            GPIO.setup(gpio_id, direction, initial_state=OFF)
+        else:
+            # pull down all inputs to GND
+            GPIO.setup(gpio_id, direction, pull_up_down=GPIO.PUD_DOWN)
         # update the value in main storage if overriden by config
         GPIO_DEFINITIONS[gpio_name] = gpio_id
         # set up a threaded callback if needed
         with suppress(KeyError):
             callback_function = callbacks[gpio_name]
-            GPIO.add_event_detect(gpio_id, GPIO.RISING, bouncetime=1000,
+            # detect both on and off on auto mode input
+            edge = GPIO.BOTH if gpio_name == 'auto_mode_in' else GPIO.RISING
+            GPIO.add_event_detect(gpio_id, edge, bouncetime=1000,
                                   callback=callback_function)
 
     # flash a LED and clean up the definitions
     atexit.register(finish)
-    set_led(ON)
+    set_led('ready_led', ON)
 
 
-def check_automatic_mode():
-    """Checks if the device is in automatic control mode"""
-    channel = GPIO_DEFINITIONS['auto_mode_in']
-    return GPIO.input(channel)
-
-
-def check_output_state():
+def check_state(gpio_name):
     """Checks the output state"""
-    channel = GPIO_DEFINITIONS['relay_state']
+    channel = GPIO_DEFINITIONS[gpio_name]
     return GPIO.input(channel)
 
 
-def set_output(state):
-    """Controls the state of the output"""
-    if not check_automatic_mode():
+def set_relay(state):
+    """Controls the state of the power relay"""
+    if not check_state('auto_mode_in'):
         raise AutoControlDisabled
     channel = GPIO_DEFINITIONS['relay_out']
     GPIO.output(channel, state)
 
 
-def set_led(state):
-    """Controls the state of the "ready" LED"""
-    channel = GPIO_DEFINITIONS['ready_led']
+def set_led(gpio_name, state=False, blink=0):
+    """Set the LED state"""
+    channel = GPIO_DEFINITIONS[gpio_name]
+    # blinking a number of times
+    for _ in range(blink):
+        GPIO.output(channel, ON)
+        time.sleep(0.2)
+        GPIO.output(channel, OFF)
+        time.sleep(0.2)
+    # final state
     GPIO.output(channel, state)
