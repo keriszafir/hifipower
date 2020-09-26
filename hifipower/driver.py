@@ -79,7 +79,7 @@ def gpio_setup(config):
         gpio_id = config.get(gpio_name, GPIO_DEFINITIONS[gpio_name])
         if direction == GPIO.OUT:
             # set the "off" initial state of outputs just in case
-            GPIO.setup(gpio_id, direction, initial_state=OFF)
+            GPIO.setup(gpio_id, direction, initial=OFF)
         else:
             # pull down all inputs to GND
             GPIO.setup(gpio_id, direction, pull_up_down=GPIO.PUD_DOWN)
