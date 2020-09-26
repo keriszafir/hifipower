@@ -28,16 +28,14 @@ from configparser import ConfigParser
 from contextlib import suppress
 from flask import Flask, jsonify
 from . import driver
-from .driver import ON, OFF
+from .driver import ON, OFF, GPIO_DEFINITIONS as DEFAULT_CONFIG
 
 LOG = logging.getLogger('hifipowerd')
-CFG = ConfigParser(defaults=dict(address='0.0.0.0', port=8000,
-                                 relay_out='PA7',
-                                 auto_mode_in='PA8',
-                                 shutdown_button='PA9',
-                                 reboot_button='PA10',
-                                 relay_state='PA11',
-                                 ready_led='PA12'))
+
+# add default address and port to the default config
+# that now stores GPIO definitions
+DEFAULT_CONFIG.update(address='0.0.0.0', port=8000)
+CFG = ConfigParser(defaults=DEFAULT_CONFIG)
 CFG.read('/etc/hifipowerd.conf')
 
 
@@ -98,7 +96,8 @@ def webapi():
     config = CFG.defaults()
     address, port = config.get('address'), config.get('port')
     debug_mode = config.get('debug_mode')
-    LOG.info('Starting rpi2casterd web API on {}:{}'.format(address, port))
+    message = 'Starting rpi2casterd web API on {}:{}'.format(address, port)
+    LOG.info(message)
     app.run(address, port, debug=debug_mode)
 
 
