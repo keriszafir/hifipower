@@ -42,38 +42,38 @@ class AutoControlDisabled(Exception):
 def gpio_setup(config):
     """Reads the gpio definitions dictionary,
     sets the outputs and inputs accordingly."""
-    def shutdown():
+    def shutdown(*_):
         """Shut the system down"""
         led('mode_led', OFF, blink=2)
         command = config.get('shutdown_command', 'poweroff')
         subprocess.run([x.strip() for x in command.split(' ')])
 
-    def reboot():
+    def reboot(*_):
         """Restart the system"""
         led('mode_led', OFF, blink=2)
         command = config.get('reboot_command', 'reboot')
         subprocess.run([x.strip() for x in command.split(' ')])
 
-    def toggle_relay_state():
+    def toggle_relay_state(*_):
         """Turn the power on or off after pressing the on/off button,
         depending on the previous state"""
         led('mode_led', blink=2)
         relay(not STATE['relay'])
 
-    def update_relay_state():
+    def update_relay_state(*_):
         """Read the relay control input whenever its state changes
         and update the state dict. This enables the function to work
         even in a forced manual control mode."""
         STATE['relay'] = check_state('relay_state')
 
-    def check_auto_mode():
+    def check_auto_mode(*_):
         """When the automatic control mode is on, turn on the red LED,
         when it's off, turn the LED off. Update the state dictionary."""
         auto_mode = check_state('auto_mode_in')
         STATE['auto_mode'] = auto_mode
         led('mode_led', auto_mode)
 
-    def finish():
+    def finish(*_):
         """Blink a LED and then clean the GPIO"""
         led('ready_led', OFF, blink=5)
         GPIO.cleanup()
