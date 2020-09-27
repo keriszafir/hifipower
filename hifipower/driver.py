@@ -102,7 +102,7 @@ def gpio_setup(config):
         # set up a threaded callback for all inputs
         with suppress(KeyError):
             callback_function = callbacks[gpio_name]
-            GPIO.add_event_detect(gpio_id, edge=GPIO.BOTH, bouncetime=300,
+            GPIO.add_event_detect(gpio_id, GPIO.BOTH, bouncetime=300,
                                   callback=callback_function)
 
     # flash a LED and clean up the definitions
