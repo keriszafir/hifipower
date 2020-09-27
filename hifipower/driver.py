@@ -30,6 +30,7 @@ except ImportError:
     print('Using RPi.GPIO on a Raspberry Pi with the BCM numbering.')
 
 ON, OFF = GPIO.HIGH, GPIO.LOW
+STATE = dict(relay=OFF, auto_mode=OFF)
 
 
 class AutoControlDisabled(Exception):
@@ -53,16 +54,24 @@ def gpio_setup(config):
         command = config.get('reboot_command', 'reboot')
         subprocess.run([x.strip() for x in command.split(' ')])
 
-    def toggle_state():
+    def toggle_relay_state():
         """Turn the power on or off after pressing the on/off button,
         depending on the previous state"""
         led('mode_led', blink=2)
-        relay(not check_state('relay_out'))
+        relay(not STATE['relay'])
+
+    def update_relay_state():
+        """Read the relay control input whenever its state changes
+        and update the state dict. This enables the function to work
+        even in a forced manual control mode."""
+        STATE['relay'] = check_state('relay_state')
 
     def check_auto_mode():
         """When the automatic control mode is on, turn on the red LED,
-        when it's off, turn the LED off"""
-        led('mode_led', check_state('auto_mode_in'))
+        when it's off, turn the LED off. Update the state dictionary."""
+        auto_mode = check_state('auto_mode_in')
+        STATE['auto_mode'] = auto_mode
+        led('mode_led', auto_mode)
 
     def finish():
         """Blink a LED and then clean the GPIO"""
@@ -75,7 +84,9 @@ def gpio_setup(config):
                  relay_state=GPIO.IN, ready_led=GPIO.OUT)
 
     callbacks = dict(shutdown_button=shutdown, reboot_button=reboot,
-                     onoff_button=toggle_state, auto_mode_in=check_auto_mode)
+                     onoff_button=toggle_relay_state,
+                     auto_mode_in=check_auto_mode,
+                     relay_state=update_relay_state)
 
     for gpio_name, direction in gpios.items():
         # if not configured then use fallback
@@ -88,12 +99,10 @@ def gpio_setup(config):
             GPIO.setup(gpio_id, direction, pull_up_down=GPIO.PUD_DOWN)
         # update the value in main storage if overriden by config
         GPIO_DEFINITIONS[gpio_name] = gpio_id
-        # set up a threaded callback if needed
+        # set up a threaded callback for all inputs
         with suppress(KeyError):
             callback_function = callbacks[gpio_name]
-            # detect both on and off on auto mode input
-            edge = GPIO.BOTH if gpio_name == 'auto_mode_in' else GPIO.RISING
-            GPIO.add_event_detect(gpio_id, edge, bouncetime=1000,
+            GPIO.add_event_detect(gpio_id, edge=GPIO.BOTH, bouncetime=300,
                                   callback=callback_function)
 
     # flash a LED and clean up the definitions
@@ -109,7 +118,7 @@ def check_state(gpio_name):
 
 def relay(state):
     """Controls the state of the power relay"""
-    if not check_state('auto_mode_in'):
+    if not STATE('auto_mode'):
         raise AutoControlDisabled
     channel = GPIO_DEFINITIONS['relay_out']
     GPIO.output(channel, state)
