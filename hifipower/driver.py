@@ -41,41 +41,55 @@ class AutoControlDisabled(Exception):
 def gpio_setup(config):
     """Reads the gpio definitions dictionary,
     sets the outputs and inputs accordingly."""
-    def shutdown(*_):
+    def shutdown(channel):
         """Shut the system down"""
-        led('mode_led', OFF, blink=2)
+        if not debounce(channel):
+            return
+        led('mode_led', blink=2)
         command = config.get('shutdown_command', 'sudo shutdown -h now')
         os.system(command)
 
-    def reboot(*_):
+    def reboot(channel):
         """Restart the system"""
-        led('mode_led', OFF, blink=2)
+        if not debounce(channel):
+            return
+        led('mode_led', blink=2)
         command = config.get('reboot_command', 'sudo reboot')
         os.system(command)
 
-    def toggle_relay_state(*_):
+    def toggle_relay_state(channel):
         """Turn the power on or off after pressing the on/off button,
         depending on the previous state"""
+        if not debounce(channel, 100):
+            return
         led('mode_led', blink=2)
-        relay(not STATE['relay'])
+        current_relay_state = check_state('relay_state')
+        relay(not current_relay_state)
 
-    def update_relay_state(*_):
+    def update_relay_state(channel):
         """Read the relay control input whenever its state changes
         and update the state dict. This enables the function to work
         even in a forced manual control mode."""
-        STATE['relay'] = check_state('relay_state')
+        STATE['relay'] = GPIO.input(channel)
 
-    def check_auto_mode(*_):
+    def check_auto_mode(channel):
         """When the automatic control mode is on, turn on the red LED,
         when it's off, turn the LED off. Update the state dictionary."""
-        auto_mode = check_state('auto_mode_in')
+        auto_mode = GPIO.input(channel)
         STATE['auto_mode'] = auto_mode
         led('mode_led', auto_mode)
+        # restore the last relay state
+        relay(STATE['relay'])
 
     def finish(*_):
         """Blink a LED and then clean the GPIO"""
         led('ready_led', OFF, blink=5)
         GPIO.cleanup()
+
+    def debounce(channel, bounce_ms=1000):
+        """Workaround for software debouncing not implemented in OPi.GPIO"""
+        time.sleep(bounce_ms/1000)
+        return GPIO.input(channel)
 
     def get_gpio_id(gpio_name):
         """Gets the GPIO id (e.g. "PA7") from the configuration,
@@ -91,6 +105,9 @@ def gpio_setup(config):
             GPIO_DEFINITIONS[gpio_name] = gpio_id
 
         return gpio_id
+
+    # run the finish function when program ends e.g. during shutdown
+    atexit.register(finish)
 
     # input configuration
     inputs = [('onoff_button', toggle_relay_state, GPIO.RISING),
@@ -114,8 +131,6 @@ def gpio_setup(config):
     for (gpio_name, initial_state) in outputs:
         gpio_id = get_gpio_id(gpio_name)
         GPIO.setup(gpio_id, GPIO.OUT, initial=initial_state)
-
-    atexit.register(finish)
 
 
 def check_state(gpio_name):

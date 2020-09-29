@@ -1,7 +1,7 @@
 """hifipower setup, meant for Raspberry Pi or Orange Pi"""
 from setuptools import setup
 
-__version__ = '0.2b9'
+__version__ = '0.2b10'
 __author__ = 'Keri Szafir'
 __author_email__ = 'keri.szafir@gmail.com'
 __github_url__ = 'http://github.com/elegantandrogyne/hifipower'
