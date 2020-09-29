@@ -6,7 +6,6 @@ or a regular Raspberry Pi"""
 import atexit
 import os
 import time
-from contextlib import suppress
 
 try:
     # use SUNXI as it gives the most predictable results
@@ -91,14 +90,12 @@ def gpio_setup(config):
             # update definitions with the value found in config
             GPIO_DEFINITIONS[gpio_name] = gpio_id
 
+    # input configuration
     inputs = [('onoff_button', toggle_relay_state, GPIO.RISING),
               ('auto_mode_in', check_auto_mode, GPIO.BOTH),
               ('relay_state', update_relay_state, GPIO.BOTH),
               ('shutdown_button', shutdown, GPIO.RISING),
               ('reboot_button', reboot, GPIO.RISING)]
-
-    outputs = [('mode_led', check_state('auto_mode_in')),
-               ('relay_out', OFF), ('ready_led', ON)]
 
     for (gpio_name, callback, edge) in inputs:
         gpio_id = get_gpio_id(gpio_name)
@@ -106,6 +103,11 @@ def gpio_setup(config):
         GPIO.setup(gpio_id, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
         # add a threaded callback on this GPIO
         GPIO.add_event_detect(gpio_id, edge, callback=callback, bouncetime=200)
+
+    # output configuration
+    # ability to check mode_led state depends on input configuration
+    outputs = [('mode_led', check_state('auto_mode_in')),
+               ('relay_out', OFF), ('ready_led', ON)]
 
     for (gpio_name, initial_state) in outputs:
         gpio_id = get_gpio_id(gpio_name)
