@@ -90,6 +90,8 @@ def gpio_setup(config):
             # update definitions with the value found in config
             GPIO_DEFINITIONS[gpio_name] = gpio_id
 
+        return gpio_id
+
     # input configuration
     inputs = [('onoff_button', toggle_relay_state, GPIO.RISING),
               ('auto_mode_in', check_auto_mode, GPIO.BOTH),
