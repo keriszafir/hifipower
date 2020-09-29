@@ -4,7 +4,7 @@ Can be used with Orange Pi (the original device is based on OPi Plus,
 as it has gigabit Ethernet port and SATA controller),
 or a regular Raspberry Pi"""
 import atexit
-import subprocess
+import os
 import time
 from contextlib import suppress
 
@@ -45,14 +45,14 @@ def gpio_setup(config):
     def shutdown(*_):
         """Shut the system down"""
         led('mode_led', OFF, blink=2)
-        command = config.get('shutdown_command', 'poweroff')
-        subprocess.run([x.strip() for x in command.split(' ')])
+        command = config.get('shutdown_command', 'sudo shutdown -h now')
+        os.system(command)
 
     def reboot(*_):
         """Restart the system"""
         led('mode_led', OFF, blink=2)
-        command = config.get('reboot_command', 'reboot')
-        subprocess.run([x.strip() for x in command.split(' ')])
+        command = config.get('reboot_command', 'sudo reboot')
+        os.system(command)
 
     def toggle_relay_state(*_):
         """Turn the power on or off after pressing the on/off button,
@@ -78,36 +78,40 @@ def gpio_setup(config):
         led('ready_led', OFF, blink=5)
         GPIO.cleanup()
 
-    gpios = dict(onoff_button=GPIO.IN, mode_led=GPIO.OUT,
-                 relay_out=GPIO.OUT, auto_mode_in=GPIO.IN,
-                 shutdown_button=GPIO.IN, reboot_button=GPIO.IN,
-                 relay_state=GPIO.IN, ready_led=GPIO.OUT)
-
-    callbacks = dict(shutdown_button=shutdown, reboot_button=reboot,
-                     onoff_button=toggle_relay_state,
-                     auto_mode_in=check_auto_mode,
-                     relay_state=update_relay_state)
-
-    for gpio_name, direction in gpios.items():
-        # if not configured then use fallback
-        gpio_id = config.get(gpio_name, GPIO_DEFINITIONS[gpio_name])
-        if direction == GPIO.OUT:
-            # set the "off" initial state of outputs just in case
-            GPIO.setup(gpio_id, direction, initial=OFF)
+    def get_gpio_id(gpio_name):
+        """Gets the GPIO id (e.g. "PA7") from the configuration,
+        updating the id in GPIO_DEFINITIONS if overriden in config.
+        If the GPIO name is not found in config, it's looked up
+        in GPIO_DEFINITIONS.
+        """
+        gpio_id = config.get(gpio_name)
+        if gpio_id is None:
+            gpio_id = GPIO_DEFINITIONS[gpio_name]
         else:
-            # pull down all inputs to GND
-            GPIO.setup(gpio_id, direction, pull_up_down=GPIO.PUD_DOWN)
-        # update the value in main storage if overriden by config
-        GPIO_DEFINITIONS[gpio_name] = gpio_id
-        # set up a threaded callback for all inputs
-        with suppress(KeyError):
-            callback_function = callbacks[gpio_name]
-            GPIO.add_event_detect(gpio_id, GPIO.BOTH, bouncetime=300,
-                                  callback=callback_function)
+            # update definitions with the value found in config
+            GPIO_DEFINITIONS[gpio_name] = gpio_id
 
-    # flash a LED and clean up the definitions
+    inputs = [('onoff_button', toggle_relay_state, GPIO.RISING),
+              ('auto_mode_in', check_auto_mode, GPIO.BOTH),
+              ('relay_state', update_relay_state, GPIO.BOTH),
+              ('shutdown_button', shutdown, GPIO.RISING),
+              ('reboot_button', reboot, GPIO.RISING)]
+
+    outputs = [('mode_led', check_state('auto_mode_in')),
+               ('relay_out', OFF), ('ready_led', ON)]
+
+    for (gpio_name, callback, edge) in inputs:
+        gpio_id = get_gpio_id(gpio_name)
+        # set the input with pulldown resistor, if supported by GPIO library
+        GPIO.setup(gpio_id, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+        # add a threaded callback on this GPIO
+        GPIO.add_event_detect(gpio_id, edge, callback=callback, bouncetime=200)
+
+    for (gpio_name, initial_state) in outputs:
+        gpio_id = get_gpio_id(gpio_name)
+        GPIO.setup(gpio_id, GPIO.OUT, initial=initial_state)
+
     atexit.register(finish)
-    led('ready_led', ON, blink=2, duration=0.2)
 
 
 def check_state(gpio_name):
