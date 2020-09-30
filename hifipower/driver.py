@@ -81,7 +81,7 @@ def gpio_setup(config):
 
     def finish(*_):
         """Blink a LED and then clean the GPIO"""
-        led('ready_led', OFF, blink=5)
+        led('ready_led', OFF, blink=5, duration=5)
         GPIO.cleanup()
 
     def debounce(channel, bounce_ms=1000):
