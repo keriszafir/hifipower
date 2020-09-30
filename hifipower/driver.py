@@ -32,12 +32,6 @@ ON, OFF = GPIO.HIGH, GPIO.LOW
 STATE = dict(relay=OFF, auto_mode=OFF)
 
 
-class AutoControlDisabled(Exception):
-    """Exception raised when trying to turn the device on or off
-    if the equipment is switched OFF or ON manually.
-    """
-
-
 def gpio_setup(config):
     """Reads the gpio definitions dictionary,
     sets the outputs and inputs accordingly."""
@@ -70,11 +64,15 @@ def gpio_setup(config):
         """Read the relay control input whenever its state changes
         and update the state dict. This enables the function to work
         even in a forced manual control mode."""
+        if not debounce(channel, 20):
+            return
         STATE['relay'] = GPIO.input(channel)
 
     def check_auto_mode(channel):
         """When the automatic control mode is on, turn on the red LED,
         when it's off, turn the LED off. Update the state dictionary."""
+        if not debounce(channel, 20):
+            return
         auto_mode = GPIO.input(channel)
         STATE['auto_mode'] = auto_mode
         led('mode_led', auto_mode)
@@ -87,9 +85,11 @@ def gpio_setup(config):
         GPIO.cleanup()
 
     def debounce(channel, bounce_ms=1000):
-        """Workaround for software debouncing not implemented in OPi.GPIO"""
+        """Workaround for software debouncing not implemented in OPi.GPIO
+        Checks if the state is unchanged after given time"""
+        initial_state = GPIO.input(channel)
         time.sleep(bounce_ms/1000)
-        return GPIO.input(channel)
+        return GPIO.input(channel) == initial_state
 
     def get_gpio_id(gpio_name):
         """Gets the GPIO id (e.g. "PA7") from the configuration,
@@ -139,10 +139,13 @@ def check_state(gpio_name):
     return GPIO.input(channel)
 
 
+def check_auto_mode():
+    """Checks if the mode switch is set to auto"""
+    return STATE['auto_mode']
+
+
 def relay(state):
     """Controls the state of the power relay"""
-    if not STATE('auto_mode'):
-        raise AutoControlDisabled
     channel = GPIO_DEFINITIONS['relay_out']
     GPIO.output(channel, state)
 

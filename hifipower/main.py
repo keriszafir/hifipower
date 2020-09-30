@@ -39,6 +39,12 @@ CFG = ConfigParser(defaults=DEFAULT_CONFIG)
 CFG.read('/etc/hifipowerd.conf')
 
 
+class AutoControlDisabled(Exception):
+    """Exception raised when trying to turn the device on or off
+    if the equipment is switched OFF or ON manually.
+    """
+
+
 def journald_setup():
     """Set up and start journald logging"""
     debug_mode = CFG.defaults().get('debug_mode')
@@ -67,16 +73,18 @@ def webapi():
 
     def control(state):
         """Turn power on or off"""
-        try:
-            driver.set_relay(state)
-            message = 'Power is now {}'.format('ON' if state else 'OFF')
-            LOG.info(message)
-            return message
-        except driver.AutoControlDisabled:
+        # check auto mode here, moved it from the driver
+        # as it caused problems with threaded callbacks
+        if not driver.check_auto_mode():
             message = ('Canot turn the power {}. Automatic control disabled'
                        .format('ON' if state else 'OFF'))
             LOG.error(message)
             return ('403 Forbidden: {}'.format(message), 403)
+        else:
+            driver.relay(state)
+            message = 'Power is now {}'.format('ON' if state else 'OFF')
+            LOG.info(message)
+            return message
 
     def turn_on():
         """Turn the power on"""
