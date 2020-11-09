@@ -54,11 +54,16 @@ def gpio_setup(config):
     def toggle_relay_state(channel):
         """Turn the power on or off after pressing the on/off button,
         depending on the previous state"""
+        # do nothing in off/manual mode
+        if not check_auto_mode():
+            return
+        # need to hold the button for 0.1s to avoid spurious (de)activations
         if not debounce(channel, 100):
             return
         led('mode_led', blink=2)
         current_relay_state = check_state('relay_state')
-        relay(not current_relay_state)
+        new_state = not current_relay_state
+        relay(new_state)
 
     def update_relay_state(channel):
         """Read the relay control input whenever its state changes
@@ -66,18 +71,28 @@ def gpio_setup(config):
         even in a forced manual control mode."""
         if not debounce(channel, 20):
             return
-        STATE['relay'] = GPIO.input(channel)
+        # start/stop pulseaudio depending on relay state
+        relay_state = GPIO.input(channel)
+        pulseaudio_control(relay_state, config)
+        STATE['relay'] = relay_state
 
-    def check_auto_mode(channel):
+    def read_auto_mode():
+        """Reads the auto mode input and sets the value in STATE"""
+        channel = GPIO_DEFINITIONS['auto_mode_in']
+        auto_mode = GPIO.input(channel)
+        STATE['auto_mode'] = auto_mode
+        return auto_mode
+
+    def update_auto_mode(channel):
         """When the automatic control mode is on, turn on the red LED,
         when it's off, turn the LED off. Update the state dictionary."""
         if not debounce(channel, 20):
             return
-        auto_mode = GPIO.input(channel)
-        STATE['auto_mode'] = auto_mode
+        auto_mode = read_auto_mode()
         led('mode_led', auto_mode)
         # restore the last relay state
-        relay(STATE['relay'])
+        relay_state = STATE['relay']
+        relay(relay_state)
 
     def finish(*_):
         """Blink a LED and then clean the GPIO"""
@@ -111,7 +126,7 @@ def gpio_setup(config):
 
     # input configuration
     inputs = [('onoff_button', toggle_relay_state, GPIO.RISING),
-              ('auto_mode_in', check_auto_mode, GPIO.BOTH),
+              ('auto_mode_in', update_auto_mode, GPIO.BOTH),
               ('relay_state', update_relay_state, GPIO.BOTH),
               ('shutdown_button', shutdown, GPIO.RISING),
               ('reboot_button', reboot, GPIO.RISING)]
@@ -131,6 +146,10 @@ def gpio_setup(config):
     for (gpio_name, initial_state) in outputs:
         gpio_id = get_gpio_id(gpio_name)
         GPIO.setup(gpio_id, GPIO.OUT, initial=initial_state)
+
+    # this prevents lack of control via web interface
+    # in case the mode switch was initially set to AUTO
+    read_auto_mode()
 
 
 def check_state(gpio_name):
@@ -171,3 +190,15 @@ def led(gpio_name, state=None, blink=0, duration=0.5):
         time.sleep(timestep)
     # final state
     GPIO.output(channel, state)
+
+
+def pulseaudio_control(state, config):
+    """starts or stops the pulseaudio daemon whenever the power
+    relay goes on or off, or the web service demands it"""
+    if state:
+        command = config.get('puseaudio_start_command',
+                             'sudo systemctl start pulseaudio.service')
+    else:
+        command = config.get('puseaudio_stop_command',
+                             'sudo systemctl stop pulseaudio.service')
+    os.system(command)
