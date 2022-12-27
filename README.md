@@ -5,7 +5,7 @@ high fidelity equipment power controller daemon
 
 A daemon running on an Orange Pi or RPi, exposing a web API for switching the audio equipment on or off, using a relay connected with one of the GPIO pins.
 
-This software reads a configuration file (``/etc/hifipowerd.conf``) and gets the pin numbers for shutdown and reboot buttons, automatic mode sense and relay drive output. Then the web API is started, exposing three endpoints:
+This software reads a configuration file (``/etc/hifipowerd.conf``) and gets the pin numbers for shutdown and reboot buttons, automatic mode sense and relay drive output. Then the web API is started, exposing endpoints accessible with ``GET`` method:
 
 ``address:port`` - main page,
 
