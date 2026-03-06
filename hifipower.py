@@ -4,209 +4,138 @@
 unit for hi-fi equipment.
 
 Designed and coded for the AC-1 audio computer.
-Keri Szafir, Keritech Electronics - 2018-2022
+Keri Szafir, Keritech Electronics - 2018-2026
 
-This daemon listens on specified address and provides web API for changing
-the power state; when this happens, a GPIO line is turned on or off,
-controlling two power relays that switch the equipment power on or off.
-Separate control is available over the web API; the big red button allows
-for simultaneous control of both channels.
-
-This program was written for an Orange Pi PC Plus platform for its connectivity,
-but it can be used with a different Orange Pi, or a regular Raspberry Pi.
-Since OPi.GPIO does NOT support software debouncing, the device was
-designed for RC hardware debouncing for all buttons.
+This daemon controls two GPIO lines which are sequentially switched,
+driving two power relays for the audio equipment power.
+Both local (pushbutton) and remote (MQTT) control is available.
 
 The daemon detects whether the equipment is in automatic control mode
-(then it can be software-driven) or manual control mode (then sending the
+(then it can be software-driven) or manual override mode (then sending the
 commands to it won't do anything).
-
-Additional functionality is planned for auto power-off after silence is
-detected on the device's audio input. This will be optional and require
-the sound card input to be wired to the audio output of a preamplifier/mixer.
-If no signal is present for a certain time, and the PDU is in "auto control"
-mode, the software will turn the power off.
-
-Auto power-on is also planned. Whenever the sound card's active
-(i.e. PulseAudio sink is no longer suspended), the equipment power is
-turned on. This may be problematic though, in case a longer time is needed
-for the switch-on (e.g. when using a vacuum tube power amp).
 """
-import atexit
+import datetime
 import logging
 import signal
 import os
 import sys
 import time
+import gpiod
 from configparser import ConfigParser
-from flask import Flask
 from systemd.journal import JournalHandler
+import paho.mqtt.client as mqtt
 
-LOG = logging.getLogger('hifipowerd')
-CFG = ConfigParser(defaults=dict(auto_mode_in='PA8', onoff_button='PA3',
+CFG = ConfigParser(defaults=dict(shutdown_button='PA0', reboot_button='PA1',
+                                 manual_mode_in='PA6', ready_led='PA7',
+                                 auto_mode_in='PA8', onoff_button='PA3',
                                  relay_out_1='PA9', relay_out_2='PA10',
-                                 shutdown_button='PA0', reboot_button='PA1',
-                                 manual_mode_in='PA6', ready_led='PA7'))
+                                 chip_path='/dev/gpiochip0', button_debounce_ms=1000,
+                                 consumer_str='hifipower GPIO interface',
+                                 shutdown_command='sudo systemctl poweroff',
+                                 reboot_command='sudo systemctl reboot',
+                                 pipewire_start_command='systemctl --user start wireplumber.service',
+                                 pipewire_stop_command='systemctl --user stop wireplumber.service',
+                                 mqtt_client_id='hifipower', mqtt_broker_address='', mqtt_port=1883,
+                                 mqtt_username='', mqtt_password='',
+                                 mqtt_status_topic_root='stat/hifipower', 
+                                 mqtt_command_topic_root='cmnd/hifipower',
+                                 mqtt_update_interval=60))
 CFG.read('/etc/hifipowerd.conf')
 
+ON, OFF = gpiod.line.Value.ACTIVE, gpiod.line.Value.INACTIVE
+IN, OUT = gpiod.line.Direction.INPUT, gpiod.line.Direction.OUTPUT
+RISING, FALLING = gpiod.line.Edge.RISING, gpiod.line.Edge.FALLING
+IONUMS = {'PA{}'.format(n): n for n in range(21)}
+CHANNELS = {name: IONUMS.get(CFG.defaults().get(name))
+            for name in ('shutdown_button', 'reboot_button', 'onoff_button', 'ready_led',
+                         'manual_mode_in', 'auto_mode_in', 'relay_out_1', 'relay_out_2')}
+DEBOUNCE = datetime.timedelta(milliseconds=int(CFG.defaults().get('button_debounce_ms')))
+GPIO_DEFS = {CHANNELS['shutdown_button']: gpiod.LineSettings(direction=IN, edge_detection=RISING, debounce_period=DEBOUNCE),
+             CHANNELS['reboot_button']: gpiod.LineSettings(direction=IN, edge_detection=RISING, debounce_period=DEBOUNCE),
+             CHANNELS['onoff_button']: gpiod.LineSettings(direction=IN, edge_detection=RISING, debounce_period=DEBOUNCE),
+             CHANNELS['manual_mode_in']: gpiod.LineSettings(direction=IN),
+             CHANNELS['auto_mode_in']: gpiod.LineSettings(direction=IN),
+             CHANNELS['ready_led']: gpiod.LineSettings(direction=OUT, output_value=ON),
+             CHANNELS['relay_out_1']: gpiod.LineSettings(direction=OUT, output_value=OFF),
+             CHANNELS['relay_out_2']: gpiod.LineSettings(direction=OUT, output_value=OFF)}
+GPIO_RQ = gpiod.request_lines(CFG.defaults().get('chip_path'),
+                              consumer=CFG.defaults().get('consumer_str'),
+                              config=GPIO_DEFS)
 
-# Conditional platform-based imports
-try:
-    # use SUNXI as it gives the most predictable results
-    from OPi import GPIO
-    GPIO.setmode(GPIO.SUNXI)
-    print('Using OPi.GPIO on an Orange Pi with the SUNXI numbering.')
-
-except ImportError:
-    # maybe we're using Raspberry Pi?
-    # use BCM as it is the most conventional scheme here
-    from RPi import GPIO
-    GPIO.setmode(GPIO.BCM)
-    print('Using RPi.GPIO on a Raspberry Pi with the BCM numbering.')
-
-
-ON, OFF = GPIO.HIGH, GPIO.LOW
-
-
-def webapi():
-    """JSON web API for communicating with the casting software."""
-    def index():
-        """Display front page"""
-        page = """<h1>Keritech Electronics AC-1 Audio Computer</h1><br>"""
-        return page
-
-    def status_json():
-        """Get or change the interface's current status."""
-        return dict(power_state=get_power_state(),
-                    auto_mode=auto_control_check(),
-                    manual_override=manual_override_check(),
-                    relay1=relay1(),
-                    relay2=relay2(),
-                    relay1_active=relay1_active(),
-                    relay2_active=relay2_active())
+MQTT = mqtt.Client(client_id=CFG.defaults().get('mqtt_client_id'), transport='tcp', clean_session=True,
+                   callback_api_version=mqtt.CallbackAPIVersion.VERSION2, protocol=mqtt.MQTTv311)
 
 
-    def out1_on():
-        """turn on the first relay"""
-        relay1(ON)
-        return output_status()
-
-    def out1_off():
-        """turn off the first relay"""
-        relay1(OFF)
-        return output_status()
-
-    def out2_on():
-        """turn on the second relay"""
-        relay2(ON)
-        return output_status()
-
-    def out2_off():
-        """turn off the second relay"""
-        relay2(OFF)
-        return output_status()
-
-    def all_on():
-        """turn the power on sequentially"""
+@MQTT.message_callback()
+def mqtt_on_message_cb(client, userdata, message, properties=None):
+    """message received callback"""
+    root = CFG.defaults().get('mqtt_command_topic_root')
+    topic = message.topic
+    subtopic = message.topic.replace(root, '')
+    # decode ASCII string to UTF-8 normal python string
+    message_payload = message.payload.decode()
+    
+    print("Received message {} on topic {}".format(message_payload, topic))
+    """translate the value to libgpiod internal state values"""
+    control_messages = {'ON': ON, 'OFF': OFF, 'TOGGLE': 'T'}
+    value = control_messages.get(message_payload)
+    if subtopic == '/power' and value == ON:
         power_on()
-        return output_status()
-
-    def all_off():
-        """turn the power off sequentially"""
+    elif subtopic == '/power' and value == OFF:
         power_off()
-        return output_status()
-
-    def toggle():
-        """toggle power button-style"""
+    elif subtopic == '/power' and value == 'T':
         power_toggle()
-        return output_status()
-
-    def output_status():
-        """text message about both devices status"""
-        msg = ''
-        if get_power_state() == -1:
-            msg = '''<div>Manual override is on -
-                   software control inactive.</div>'''
-        main_pwr = 'ON' if relay1_active() else 'OFF'
-        amp_pwr = 'ON' if relay2_active() else 'OFF'
-        return f'''{msg}<div>Main power is {main_pwr}<br>
-                   Amp power is {amp_pwr}</div>'''
-
-    app = Flask('rpi2casterd')
-    app.route('/')(index)
-    app.route('/json')(status_json)
-    app.route('/power')(output_status)
-    app.route('/power/on')(all_on)
-    app.route('/power/off')(all_off)
-    app.route('/power/toggle')(toggle)
-    app.route('/power/1')(relay1_active)
-    app.route('/power/2')(relay2_active)
-    app.route('/power/1/on')(out1_on)
-    app.route('/power/1/off')(out1_off)
-    app.route('/power/2/on')(out2_on)
-    app.route('/power/2/off')(out2_off)
-    config = CFG.defaults()
-    app.run(config.get('address'), config.get('port'),
-            debug=config.get('debug_mode'))
+    elif subtopic == '/power/1':
+        relay(1, value)
+    elif subtopic == '/power/2':
+        relay(2, value)
+    elif subtopic == '/pipewire':
+        pw_control(value)
 
 
-def gpio_setup():
-    """Reads the gpio definitions dictionary,
-    sets the outputs and inputs accordingly."""
-    config = CFG.defaults()
-    def shutdown(*_):
-        """Shut the system down"""
-        led(blink=5)
-        command = config.get('shutdown_command', 'sudo poweroff')
-        os.system(command)
+@MQTT.connect_callback()
+def mqtt_on_connect_cb(client, userdata, flags, reason_code, properties):
+    """connected function"""
+    status_topic_root = CFG.defaults().get('mqtt_status_topic_root')
+    command_topic_root = CFG.defaults().get('mqtt_command_topic_root')
+    print('mqtt connected, subscribing command topics')
+    MQTT.subscribe('{}/#'.format(command_topic_root), 2)
+    print('publishing welcome message and status info')
+    MQTT.publish(status_topic_root, 'Hellorld! from hifipower')
+    MQTT.publish(status_topic_root, 'online', retain=True)
+    
 
-    def reboot(*_):
-        """Restart the system"""
-        led(blink=5)
-        command = config.get('reboot_command', 'sudo reboot')
-        os.system(command)
-
-    def finish(*_):
-        """Blink a LED and then clean the GPIO"""
-        led(OFF, blink=5, duration=5)
-        relay1(OFF)
-        relay2(OFF)
-        GPIO.cleanup()
-
-    # run the finish function when program ends e.g. during shutdown
-    atexit.register(finish)
-
-    # input configuration
-    inputs = [('onoff_button', power_toggle),
-              ('shutdown_button', shutdown),
-              ('reboot_button', reboot),
-              ('auto_mode_in', None),
-              ('manual_mode_in', None)]
-
-    for (gpio_name, callback) in inputs:
-        gpio_id = config.get(gpio_name)
-        GPIO.setup(gpio_id, GPIO.IN)
-        # add a threaded callback on this GPIO
-        if callback is not None:
-            GPIO.add_event_detect(gpio_id, GPIO.RISING, callback=callback)
-
-    # output configuration
-    GPIO.setup(config.get('relay_out_1'), GPIO.OUT, initial=OFF)
-    GPIO.setup(config.get('relay_out_2'), GPIO.OUT, initial=OFF)
-    GPIO.setup(config.get('ready_led'), GPIO.OUT, initial=ON)
+@MQTT.connect_fail_callback()
+def mqtt_on_connect_fail_cb(client, userdata, flags, reason_code, properties):
+    """not connected for some reason"""
+    print('mqtt connection failed, reason: {}'.format(reason_code))
 
 
-def journald_setup():
-    """Set up and start journald logging"""
-    debug_mode = CFG.defaults().get('debug_mode')
-    if debug_mode:
-        LOG.setLevel(logging.DEBUG)
-        LOG.addHandler(logging.StreamHandler(sys.stderr))
-    journal_handler = JournalHandler()
-    log_entry_format = '[%(levelname)s] %(message)s'
-    journal_handler.setFormatter(logging.Formatter(log_entry_format))
-    LOG.setLevel(logging.INFO)
-    LOG.addHandler(journal_handler)
+@MQTT.disconnect_callback()
+def mqtt_on_disconnect_cb(client, userdata, flags, reason_code, properties):
+    """disconnected from server - print why"""
+    print('mqtt disconnected, reason: {}'.format(reason_code))
+
+
+def mqtt_status_update():
+    """Publish info on MQTT channels"""
+    root = CFG.defaults().get('mqtt_status_topic_root')
+    MQTT.publish("{}/power_state".format(root), get_power_state())
+    MQTT.publish("{}/power/1".format(root), 'ON' if relay(1) else 'OFF')
+    MQTT.publish("{}/power/2".format(root), 'ON' if relay(2) else 'OFF')
+    MQTT.publish("{}/auto_control".format(root), 'ON' if auto_control_check() else 'OFF')
+    MQTT.publish("{}/manual_override".format(root), 'ON' if manual_override_check() else 'OFF')
+    MQTT.loop()
+
+
+def mqtt_goodbye():
+    """Finishing message, disconnect, client teardown"""
+    status_topic_root = CFG.defaults().get('mqtt_status_topic_root')
+    mqtt_status_update()
+    MQTT.publish(status_topic_root, 'hifipower going down!')
+    MQTT.publish(status_topic_root, 'offline', retain=True)
+    MQTT.disconnect()
+    MQTT.loop_stop()
 
 
 def get_power_state():
@@ -216,64 +145,28 @@ def get_power_state():
     """
     if not auto_control_check():
         return -1
-    if relay2_active():
+    if relay(2):
         # stage 2
         return 2
-    if relay1_active():
+    if relay(1):
         # stage 1
         return 1
     return 0
 
 
-def get_channel(gpio_name):
-    """Get the GPIO number for a channel name"""
-    return CFG.defaults().get(gpio_name)
+def get_input_state(gpio_name):
+    """Read the input state by the gpio name"""
+    return GPIO_RQ.get_value(CHANNELS[gpio_name])
 
 
 def auto_control_check():
     """Checks if the device is in the automatic/software control mode"""
-    return GPIO.input(get_channel('auto_mode_in'))
+    return True if get_input_state('auto_mode_in') else False
 
 
 def manual_override_check():
     """Checks if the device is in the manual override ON state"""
-    return GPIO.input(get_channel('manual_mode_in'))
-
-
-def relay1_active():
-    """Checks if the channel 1 relay is on.
-    This is true either in manual override, or in auto control when
-    channel 1 output is set to ON.
-    """
-    # we can use GPIO.input() on outputs to check their state
-    return manual_override_check() or auto_control_check() and relay1()
-
-
-def relay2_active():
-    """Checks if the channel 2 relay is on.
-    This is true either in manual override, or in auto control when
-    channel 2 output is set to ON.
-    """
-    # we can use GPIO.input() on outputs to check their state
-    return manual_override_check() or auto_control_check() and relay2()
-
-
-def relay1(state=None):
-    """Controls the state of the power relay - channel 1.
-       If state is None, returns the current state."""
-    channel = get_channel('relay_out_1')
-    if state is not None:
-        GPIO.output(channel, state)
-    return GPIO.input(channel)
-
-
-def relay2(state=None):
-    """Controls the state of the power relay - channel 2.
-    If state is None, returns the current state."""
-    channel = get_channel('relay_out_2')
-    if state is not None:
-        GPIO.output(channel, state)
-    return GPIO.input(channel)
+    return True if get_input_state('manual_mode_in') else False
 
 
 def power_on():
@@ -281,15 +174,13 @@ def power_on():
     power_state = get_power_state()
     if power_state == 1:
         # turn on the amps right away
-        relay2(ON)
+        relay(2, ON)
     elif power_state == 0:
         # turn on the main gear, wait 5s, turn on the amps
-        relay1(ON)
+        relay(1, ON)
         time.sleep(5)
-        relay2(ON)
-    else:
-        # either fully on or manual control = do nothing
-        return
+        relay(2, ON)
+    pw_control(ON)
 
 
 def power_off():
@@ -298,15 +189,13 @@ def power_off():
     power_state = get_power_state()
     if power_state == 2:
         # full de-powering sequence
-        relay2(OFF)
+        relay(2, OFF)
         time.sleep(15)
-        relay1(OFF)
+        relay(1, OFF)
     elif power_state == 1:
         # power off main only
-        relay1(OFF)
-    else:
-        # either powered off or manual mode, do nothing
-        return
+        relay(1, OFF)
+    pw_control(OFF)
 
 
 def power_toggle(*_):
@@ -330,51 +219,129 @@ def led(state=None, blink=0, duration=0.5):
                 None preserves the previous one
         blink - number of LED blinks before the state is set
         duration - total time of blinking in seconds"""
-    channel = get_channel('ready_led')
-    # preserve the previous state in case it is None
-    if state is None:
-        state = GPIO.input(channel)
+    
     # each blink cycle has 2 timesteps,
     # how long they are depends on the number of cycles and blinking duration
     timestep = 0.5 * duration / (blink or 1)
-    # blinking a number of times
+    
+    
+    pin = CHANNELS['ready_led']
+    # check the initial state if not supplied
+    if state is None:
+        state = GPIO_RQ.get_value(pin)
+    # do the blinking for a number of cycles
     for _ in range(blink):
-        GPIO.output(channel, ON)
+        GPIO_RQ.set_value(pin, ON)
         time.sleep(timestep)
-        GPIO.output(channel, OFF)
+        GPIO_RQ.set_value(pin, OFF)
         time.sleep(timestep)
     # final state
-    GPIO.output(channel, state)
+    GPIO_RQ.set_value(pin, state)
+    return GPIO_RQ.get_value(pin)
 
 
-def pw_control(state, config):
-    """starts or stops the pipewire daemon whenever the power
+def relay(channel_id, state=None):
+    """Controls the state of the power relay - channel 1.
+       If state is None, returns the current state."""
+    
+    pin = CHANNELS['relay_out_{}'.format(channel_id)]
+    if state is not None and auto_control_check():
+        led(blink=2)
+        GPIO_RQ.set_value(pin, state)
+        mqtt_status_update()
+    return GPIO_RQ.get_value(pin)
+
+
+def pw_control(state):
+    """starts or stops the pipewire/wireplumber daemon whenever the power
     relay goes on or off, or the web service demands it"""
     if state:
-        command = config.get('pipewire_start_command',
-                             'systemctl --user start pipewire.service')
+        command = CFG.defaults().get('pipewire_start_command')
     else:
-        command = config.get('pipewire_stop_command',
-                             'systemctl --user stop pipewire.service')
+        command = CFG.defaults().get('pipewire_stop_command')
     os.system(command)
 
 
 def main():
     """Main function"""
-    # signal handling routine
     def signal_handler(*_):
         """Exit gracefully if SIGINT or SIGTERM received"""
         raise KeyboardInterrupt
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
+    
+    # change this to reboot or shutdown and execute at the very end if needed
+    exit_command = ''
+    
+    # how often do we need to post status updates on mqtt? (keepalive too)
+    interval = CFG.defaults().get('mqtt_update_interval')
+    mqtt_update_interval = datetime.timedelta(seconds=int(interval))
+    # force the first update right away
+    now = datetime.datetime.now()
+    update_last_checked = now - mqtt_update_interval
 
-    # get the GPIO definitions and set up the I/O
-    journald_setup()
-    gpio_setup()
-    # start the webapi loop
-    webapi()
+    # systemd-journal logging setup
+    debug_mode = CFG.defaults().get('debug_mode')
+    logger = logging.getLogger('hifipowerd')
+    if debug_mode:
+        logger.setLevel(logging.DEBUG)
+        logger.addHandler(logging.StreamHandler(sys.stderr))
+    else:
+        logger.setLevel(logging.INFO)
+    journal_handler = JournalHandler()
+    log_entry_format = '[%(levelname)s] %(message)s'
+    journal_handler.setFormatter(logging.Formatter(log_entry_format))
+    logger.addHandler(journal_handler)
+    
+    # set up and start the MQTT client
+    username, password = CFG.defaults().get('mqtt_username'), CFG.defaults().get('mqtt_password')
+    broker, port = CFG.defaults().get('mqtt_broker_address'), CFG.defaults().get('mqtt_port')
+    MQTT.username_pw_set(username, password)
+    
+    print('Connecting MQTT client...')
+    MQTT.connect_async(broker, port=int(port), keepalive=60)
+    MQTT.loop_start()
+    
+    
+    try:        
+        # main loop
+        while True:
+            now = datetime.datetime.now()
+            if now > update_last_checked + mqtt_update_interval:
+                mqtt_status_update()
+                update_last_checked = now
+            
+            # use edge detection events rather than reading the line state,
+            # because the latter was prone to interference from MQTT issued commands
+            # I don't know why really, but it made the program think the GPIOs were active
+            for event in GPIO_RQ.read_edge_events():
+                gpio_pin = event.line_offset 
+                if gpio_pin == CHANNELS['onoff_button']:
+                    print('on/off button pressed!')
+                    power_toggle()
+                elif gpio_pin == CHANNELS['reboot_button']:
+                    print('Reboot button pressed! Initiating system reboot...')
+                    exit_command = CFG.defaults().get('reboot_command')
+                    raise KeyboardInterrupt
+                elif gpio_pin == CHANNELS['shutdown_button']:
+                    print('Shutdown button pressed! Initiating system shutdown...')
+                    exit_command = CFG.defaults().get('shutdown_command')
+                    raise KeyboardInterrupt
+        
+    except KeyboardInterrupt:
+        print('Exiting hifipower...')
+    finally:
+        print('Equipment power down sequence initiated...')
+        led(ON, blink=5, duration=5)
+        power_off()
+        led(OFF)
+        print('disconnecting MQTT...')
+        mqtt_goodbye()
+        if exit_command:
+            os.system(exit_command)
 
 
 if __name__ == '__main__':
     main()
+

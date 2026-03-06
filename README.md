@@ -3,25 +3,17 @@
 high fidelity equipment power controller daemon
 -----------------------------------------------
 
-A daemon running on an Orange Pi or RPi, exposing a web API for switching the audio equipment on or off, using a relay connected with one of the GPIO pins.
+A daemon running on a single board computer (RPi etc.) using GPIOs for controlling two relays sequentially, and a few GPIOs for buttons, sensing and LED control.
 
-This software reads a configuration file (``/etc/hifipowerd.conf``) and gets the pin numbers for shutdown and reboot buttons, automatic mode sense and relay drive output. Then the web API is started, exposing endpoints accessible with ``GET`` method:
+This software reads a configuration file (``/etc/hifipowerd.conf``) and gets the pin numbers for shutdown and reboot buttons, automatic mode sense and relay drive output.
+The program uses MQTT for reporting status and accepting commands, supporting separate prefix roots for both.
 
-``address:port`` - main page,
-
-``address:port/json`` - get state data as JSON,
-
-``address:port/power`` - get the current state,
-
-``address:port/power/on`` - turns the power on, returning the current state of outputs,
-
-``address:port/power/off`` - turns the power off, returning the current state of outputs,
-
-``address:port/power/toggle`` - turns on if power was off, turns off if power was on (like the on/off button does)
-
-``address:port/power/1/on``, ``address:port/power/1/off``, ``address:port/power/2/on``, ``address:port/power/2/off`` - individual channel control.
-
-Future features
----------------
-
-Use PulseAudio or ALSA to detect lack of audio signal on the input (configurable), then if no audio is present for a preset time (e.g. 10 minutes), turn the equipment off automatically. Prevents idle power draw by e.g. vacuum tube amplifiers.
+MQTT_STATUS_ROOT for hello and goodbye messages, ``online`` and ``offline`` status reporting
+MQTT_STATUS_ROOT/power_state (-1 = manual control, 0 = off, 1 = stage 1 activated, 2 = stage 2 full power activated) - current power state
+MQTT_STATUS_ROOT/power/{1,2} (``ON`` or ``OFF``) - power state of both relays
+MQTT_STATUS_ROOT/auto_control (``ON`` or ``OFF``) - whether automatic (software-driven) control is enabled
+MQTT_STATUS_ROOT/manual_override (``ON`` or ``OFF``) - whether the device is in manual override ON mode
+(not implemented yet) MQTT_STATUS_ROOT/pipewire (``ON`` or ``OFF``) - whether pipewire audio server is started
+MQTT_COMMAND_ROOT/power (``ON``, ``OFF`` or  ``T``) - turn power on, off or toggle
+MQTT_COMMAND_ROOT/power/{1, 2} (``ON`` or ``OFF``) - turn individual relay's power on or off
+MQTT_COMMAND_ROOT/pipewire (``ON`` or ``OFF``) - start or stop the pipewire audio server
