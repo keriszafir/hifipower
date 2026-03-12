@@ -19,9 +19,10 @@ import logging
 import signal
 import os
 import sys
-import time
+import threading
 import gpiod
 from configparser import ConfigParser
+from time import sleep
 from systemd.journal import JournalHandler
 import paho.mqtt.client as mqtt
 
@@ -100,7 +101,7 @@ def mqtt_on_connect_cb(client, userdata, flags, reason_code, properties):
     command_topic_root = CFG.defaults().get('mqtt_command_topic_root')
     print('mqtt connected, subscribing command topics')
     MQTT.subscribe('{}/#'.format(command_topic_root), 2)
-    print('publishing welcome message and status info')
+    print('publishing welcome message and status info...')
     MQTT.publish(status_topic_root, 'Hellorld! from hifipower')
     MQTT.publish(status_topic_root, 'online', retain=True)
     
@@ -178,7 +179,7 @@ def power_on():
     elif power_state == 0:
         # turn on the main gear, wait 5s, turn on the amps
         relay(1, ON)
-        time.sleep(5)
+        sleep(5)
         relay(2, ON)
     pw_control(ON)
 
@@ -190,7 +191,7 @@ def power_off():
     if power_state == 2:
         # full de-powering sequence
         relay(2, OFF)
-        time.sleep(15)
+        sleep(15)
         relay(1, OFF)
     elif power_state == 1:
         # power off main only
@@ -232,9 +233,9 @@ def led(state=None, blink=0, duration=0.5):
     # do the blinking for a number of cycles
     for _ in range(blink):
         GPIO_RQ.set_value(pin, ON)
-        time.sleep(timestep)
+        sleep(timestep)
         GPIO_RQ.set_value(pin, OFF)
-        time.sleep(timestep)
+        sleep(timestep)
     # final state
     GPIO_RQ.set_value(pin, state)
     return GPIO_RQ.get_value(pin)
@@ -267,19 +268,28 @@ def main():
     def signal_handler(*_):
         """Exit gracefully if SIGINT or SIGTERM received"""
         raise KeyboardInterrupt
+    
+    def mqtt_update_loop():
+        """update the status periodically"""
+        # how often do we need to post status updates on mqtt? (keepalive)
+        interval = CFG.defaults().get('mqtt_update_interval')
+        mqtt_update_interval = datetime.timedelta(seconds=int(interval))
+        now = datetime.datetime.now()
+        # deliberately set time back to force the initial update
+        update_last_checked = now - mqtt_update_interval
+        while working:
+            now = datetime.datetime.now()
+            if MQTT.is_connected() and now > update_last_checked + mqtt_update_interval:
+                print('posting mqtt status update...')
+                mqtt_status_update()
+                update_last_checked = now
+        
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
     # change this to reboot or shutdown and execute at the very end if needed
     exit_command = ''
-    
-    # how often do we need to post status updates on mqtt? (keepalive too)
-    interval = CFG.defaults().get('mqtt_update_interval')
-    mqtt_update_interval = datetime.timedelta(seconds=int(interval))
-    # force the first update right away
-    now = datetime.datetime.now()
-    update_last_checked = now - mqtt_update_interval
 
     # systemd-journal logging setup
     debug_mode = CFG.defaults().get('debug_mode')
@@ -300,18 +310,17 @@ def main():
     MQTT.username_pw_set(username, password)
     
     print('Connecting MQTT client...')
-    MQTT.connect_async(broker, port=int(port), keepalive=60)
     MQTT.loop_start()
+    MQTT.connect_async(broker, port=int(port), keepalive=60)
     
+    # set up regular status updates on MQTT
+    working = True
+    mqtt_updates = threading.Thread(target=mqtt_update_loop)
+    mqtt_updates.start()
     
     try:        
         # main loop
         while True:
-            now = datetime.datetime.now()
-            if now > update_last_checked + mqtt_update_interval:
-                mqtt_status_update()
-                update_last_checked = now
-            
             # use edge detection events rather than reading the line state,
             # because the latter was prone to interference from MQTT issued commands
             # I don't know why really, but it made the program think the GPIOs were active
@@ -336,6 +345,9 @@ def main():
         led(ON, blink=5, duration=5)
         power_off()
         led(OFF)
+        print('stopping regular MQTT status updates...')
+        working = False
+        mqtt_updates.join()
         print('disconnecting MQTT...')
         mqtt_goodbye()
         if exit_command:
